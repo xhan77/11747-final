@@ -144,6 +144,7 @@ class MyGPT2LMHeadModel(GPT2PreTrainedModel):
             loss_fct = CrossEntropyLoss(ignore_index=2)
             loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
             outputs = (loss,) + outputs
+        # TODO: add an ELIF that takes in two sequences and calculates the prob diff
 
         return outputs  # (loss), lm_logits, presents, (all hidden_states), (attentions)
     
@@ -191,6 +192,7 @@ class MnliDataset(Dataset):
                         raise ValueError("MNLI dataset mode incorrect")
 
             self.examples = tokenizer.batch_encode_plus(lines, add_special_tokens=True, max_length=block_size)["input_ids"]
+            # TODO: test examples need contrastive sentence pairs
 
             logger.info("Saving features into cached file %s", cached_features_file)
             with open(cached_features_file, "wb") as handle:
