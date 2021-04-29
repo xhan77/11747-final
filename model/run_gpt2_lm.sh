@@ -1,3 +1,5 @@
+# below is a script for finetuning a GPT2 LM on MNLI premise data
+
 rm -rf _test_tensorboard/
 rm -rf _test_output/
 
