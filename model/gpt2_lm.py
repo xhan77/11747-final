@@ -252,6 +252,54 @@ class MnliDataset(Dataset):
 #         with open(input_file, "rb") as f:
 #             bias_pairs = pickle.load(f)
 #             return bias_pairs
+
+class ContraDataset(Dataset):
+    
+    def __init__(self, tokenizer: PreTrainedTokenizer, args, file_path: str, block_size=512):
+        assert os.path.isfile(file_path)
+
+        directory, filename = os.path.split(file_path)
+        cached_features_file = os.path.join(
+            directory, args.model_type + "_cached_lm_" + filename
+        )
+
+        if os.path.exists(cached_features_file) and not args.overwrite_cache:
+            logger.info("Loading features from cached file %s", cached_features_file)
+            with open(cached_features_file, "rb") as handle:
+                data = pickle.load(handle)
+                self.examples = data["input_ids"]
+                self.token_types = data["token_type_ids"]
+        else:
+            logger.info("Creating features from dataset file at %s", directory)
+            
+            raw_lines = self._read_tsv(file_path)
+            lines = []
+            for line in raw_lines:
+                lines.append((line[0], line[1])) # Kayo: assumes data is tsv file with lines "<correct sentence> \t <incorrect sentence>"
+
+            data = tokenizer.batch_encode_plus(lines, add_special_tokens=True, max_length=block_size)
+            self.examples = data["input_ids"]
+            self.token_types = data["token_type_ids"]
+
+            logger.info("Saving features into cached file %s", cached_features_file)
+            with open(cached_features_file, "wb") as handle:
+                pickle.dump(data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def __len__(self):
+        return len(self.examples)
+
+    def __getitem__(self, item):
+        example = torch.tensor(self.examples[item], dtype=torch.long)
+        token_type = torch.tensor(self.token_types[item], dtype=torch.bool)
+        return example[torch.where(~token_type)], example[torch.where(token_type)] # Kayo: returns tuple (correct, incorrect)
+
+    def _read_tsv(cls, input_file, quotechar=None):
+        with open(input_file, "r") as f:
+            reader = csv.reader(f, delimiter="\t", quotechar=quotechar)
+            lines = []
+            for line in reader:
+                lines.append(line)
+            return lines
         
 
 def load_and_cache_examples(args, tokenizer, evaluate=False):
@@ -262,6 +310,8 @@ def load_and_cache_examples(args, tokenizer, evaluate=False):
     elif args.task == "sbf":
         raise ValueError("Incorrect task")
 #         return SbfDataset(tokenizer, args, file_path=file_path, block_size=args.block_size, mode=mode)
+    elif args.task == "contra":
+        return ContraDataset(tokenizer, args, file_path=file_path, block_size=args.block_size)
     else:
         raise ValueError("Incorrect task")
 
@@ -338,7 +388,7 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
     set_seed(args)  # Added here for reproducibility
     for _ in train_iterator:
         epoch_iterator = tqdm(train_dataloader, desc="Iteration")
-        for step, batch in enumerate(epoch_iterator):
+        for step, batch in enumerate(epoch_iterator): # batch: (2, batch_size)
 
             inputs, labels = batch, batch
             inputs = inputs.to(args.device)
@@ -399,6 +449,9 @@ def evaluate(args, model: PreTrainedModel, tokenizer: PreTrainedTokenizer, prefi
 
     def collate(examples: List[torch.Tensor]):
         if tokenizer._pad_token is None:
+            if args.task == "contra":
+                return pad_sequence(list(map(lambda x: x[:][0], examples)), batch_first=True, padding_value=2),\
+                       pad_sequence(list(map(lambda x: x[:][1], examples)), batch_first=True, padding_value=2)
             return pad_sequence(examples, batch_first=True, padding_value=2) # Han: GPT2 has no paddings. We use # (index=2) as padding so that the loss function knows to ignore.
         return pad_sequence(examples, batch_first=True, padding_value=tokenizer.pad_token_id)
 
@@ -412,24 +465,36 @@ def evaluate(args, model: PreTrainedModel, tokenizer: PreTrainedTokenizer, prefi
     logger.info("  Num examples = %d", len(eval_dataset))
     logger.info("  Batch size = %d", args.eval_batch_size)
     eval_loss = 0.0
+    contra_loss = 0.0
     nb_eval_steps = 0
     model.eval()
 
     for batch in tqdm(eval_dataloader, desc="Evaluating"):
         inputs, labels = batch, batch
-        inputs = inputs.to(args.device)
-        labels = labels.to(args.device)
-
+    
         with torch.no_grad():
-            outputs = model(inputs, labels=labels)
-            lm_loss = outputs[0]
-            eval_loss += lm_loss.mean().item()
+            if args.task == "contra":
+                correct_inputs, incorrect_inputs = inputs[0].to(args.device), inputs[1].to(args.device)
+                correct_labels, incorrect_labels = labels[0].to(args.device), labels[1].to(args.device)
+                correct_outputs = model(correct_inputs, labels=correct_labels)
+                incorrect_outputs = model(incorrect_inputs, labels=incorrect_labels)
+                lm_loss = correct_outputs[0]
+                diff_loss = correct_outputs[0] - incorrect_outputs[0]
+                eval_loss += lm_loss.mean().item()
+                contra_loss += diff_loss.mean().item()
+            else:
+                inputs = inputs.to(args.device)
+                labels = labels.to(args.device)
+                outputs = model(inputs, labels=labels)
+                lm_loss = outputs[0]
+                eval_loss += lm_loss.mean().item()
         nb_eval_steps += 1
 
     eval_loss = eval_loss / nb_eval_steps
+    contra_loss = contra_loss / nb_eval_steps
     perplexity = torch.exp(torch.tensor(eval_loss))
 
-    result = {"perplexity": perplexity}
+    result = {"perplexity": perplexity, "contrastive": torch.exp(torch.tensor(contra_loss))}
 
     output_eval_file = os.path.join(eval_output_dir, prefix, "eval_results.txt")
     with open(output_eval_file, "w") as writer:
@@ -461,7 +526,7 @@ def main():
 
     # Required parameters
     parser.add_argument(
-        "--train_data_file", default=None, type=str, required=True, help="The input training data file (a text file)."
+        "--train_data_file", default=None, type=str, help="The input training data file (a text file)."
     )
     parser.add_argument(
         "--output_dir",
