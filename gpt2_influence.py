@@ -38,7 +38,7 @@ except ImportError:
     from tensorboardX import SummaryWriter
 
 
-from model.gpt2_lm import MyGPT2LMHeadModel, MnliDataset, load_and_cache_examples, set_seed
+from model.gpt2_lm import MyGPT2LMHeadModel, MnliDataset, ContraDataset, load_and_cache_examples, set_seed
 
 
 logger = logging.getLogger(__name__)
@@ -81,8 +81,8 @@ def get_inverse_hvp_lissa(v, model, param_influence, train_lissa_loader, args):
                 lissa_data_iterator = iter(train_lissa_loader)
                 tmp_elem = next(lissa_data_iterator)
                 inputs, labels = tmp_elem, tmp_elem
-            inputs = inputs.to(args.device)
-            labels = labels.to(args.device)
+            inputs = inputs[0].to(args.device) # Han: using the test contrastive correct sentence ([0]) as training for now, need to modify later
+            labels = labels[0].to(args.device) # Han: using the test contrastive correct sentence ([0]) as training for now, need to modify later
             
             model.zero_grad()
             outputs = model(inputs, labels=labels)
@@ -258,6 +258,9 @@ def main():
 
     def collate(examples: List[torch.Tensor]):
         if tokenizer._pad_token is None:
+            if args.task == "contra":
+                return pad_sequence(list(map(lambda x: x[:][0], examples)), batch_first=True, padding_value=2),\
+                       pad_sequence(list(map(lambda x: x[:][1], examples)), batch_first=True, padding_value=2)
             return pad_sequence(examples, batch_first=True, padding_value=2) # Han: GPT2 has no paddings. We use # (index=2) as padding so that the loss function knows to ignore.
         return pad_sequence(examples, batch_first=True, padding_value=tokenizer.pad_token_id)
 
@@ -291,10 +294,6 @@ def main():
     influence_dict = dict()
     ihvp_dict = dict()
     
-    # Target metric mask data
-    raw_eval_set = pickle.load(open(args.eval_data_file, 'rb'))
-    eval_target_masks = [_d[3] for _d in raw_eval_set] # 2 for toxic word mask, 3 for saliency map mask
-    
     for tmp_idx, batch in enumerate(eval_dataloader):
         if args.start_test_idx != -1 and args.end_test_idx != -1:
             if tmp_idx < args.start_test_idx:
@@ -306,31 +305,25 @@ def main():
                 continue
             if tmp_idx > args.test_idx:
                 break
-        
+                
+        if args.task != "contra":
+            raise ValueError("only supporting contrastive setup now")
+
         inputs, labels = batch, batch
-        inputs = inputs.to(args.device)
-        labels = labels.to(args.device)
+        correct_inputs, incorrect_inputs = inputs[0].to(args.device), inputs[1].to(args.device)
+        correct_labels, incorrect_labels = labels[0].to(args.device), labels[1].to(args.device)
         
-        if len(batch[0]) <= 1: # prevent empty label after shift since we have no <SOS>
+        if len(correct_inputs[0]) <= 1 or len(incorrect_inputs[0]) <= 1: # prevent empty label after shift since we have no <SOS>
             continue
         influence_dict[tmp_idx] = np.zeros(len(train_dataset))
         
         ######## L_TEST GRADIENT ########
         model.eval()
         model.zero_grad()
-#         outputs = model(inputs, labels=labels)
-#         test_loss = outputs[0]
-        lm_logits = model(inputs)[0]
-        shift_logits = lm_logits[..., :-1, :].contiguous()
-        shift_labels = labels[..., 1:].contiguous()
-        loss_fct = CrossEntropyLoss(ignore_index=2, reduction='none')
-        sep_loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-        eval_mask = eval_target_masks[tmp_idx]
-        assert sep_loss.size(-1) + 1 == len(eval_mask) # Han: the first token is ignored
-        eval_mask_tensor = torch.FloatTensor(eval_mask).to(args.device)
-        test_loss = torch.sum(sep_loss * eval_mask_tensor[1:])# / torch.sum(eval_mask_tensor[1:])
-        
-#         test_loss += torch.mean(sep_loss) # Han: maintaining a proportion of full sequence perplexity
+        correct_outputs = model(correct_inputs, labels=correct_labels)
+        incorrect_outputs = model(incorrect_inputs, labels=incorrect_labels)
+        lm_loss = correct_outputs[0]
+        test_loss = correct_outputs[0] - incorrect_outputs[0] # this is the diff_loss
         
         test_grads = autograd.grad(test_loss, param_influence)
         ################
@@ -352,11 +345,13 @@ def main():
     
     set_seed(args)
     for train_idx, train_batch in enumerate(tqdm(train_dataloader, desc="Train data gradient")):
-        if len(train_batch[0]) <= 1: # prevent empty label after shift since we have no <SOS>
-            continue
         _inputs, _labels = train_batch, train_batch
-        _inputs = _inputs.to(args.device)
-        _labels = _labels.to(args.device)
+        
+        _inputs = _inputs[0].to(args.device) # Han: using the test contrastive correct sentence ([0]) as training for now, need to modify later
+        _labels = _labels[0].to(args.device) # Han: using the test contrastive correct sentence ([0]) as training for now, need to modify later
+        
+        if len(_inputs[0]) <= 1: # prevent empty label after shift since we have no <SOS>
+            continue
 
         ######## L_TRAIN GRADIENT ########
         model.train()
@@ -369,6 +364,8 @@ def main():
         with torch.no_grad():
             for tmp_idx in ihvp_dict.keys():
                 influence_dict[tmp_idx][train_idx] = torch.dot(ihvp_dict[tmp_idx], gather_flat_grad(train_grads)).item()
+    
+    print(influence_dict)
     
     for k, v in influence_dict.items():
         influence_filename = f"influence_test_idx_{k}.pkl"

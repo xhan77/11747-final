@@ -494,7 +494,7 @@ def evaluate(args, model: PreTrainedModel, tokenizer: PreTrainedTokenizer, prefi
     contra_loss = contra_loss / nb_eval_steps
     perplexity = torch.exp(torch.tensor(eval_loss))
 
-    result = {"perplexity": perplexity, "contrastive": torch.exp(torch.tensor(contra_loss))}
+    result = {"perplexity": perplexity, "contrastive": torch.exp(torch.tensor(contra_loss))} # contrastive=1: correct and incorrect have equal prob, want <1
 
     output_eval_file = os.path.join(eval_output_dir, prefix, "eval_results.txt")
     with open(output_eval_file, "w") as writer:
