@@ -207,6 +207,13 @@ def main():
                         type=str,
                         default="IF",
                         help="IF - influence functions, GC - gradient cosine similarity")
+    parser.add_argument('--per_layer',
+                        action="store_true",
+                        help="study per layer influence")
+
+
+    args = parser.parse_args()
+
 
     args = parser.parse_args()
 
@@ -253,6 +260,7 @@ def main():
 
     # Load model
     model = model_class.from_pretrained(args.model_name_or_path, config=config)
+    n_layers = len(model.h)
 
     model.to(args.device)
     
@@ -290,6 +298,19 @@ def main():
         tmp_p = p.clone().detach()
         model_size += torch.numel(tmp_p)
     logger.info(" model size = %d parameters", model_size)
+
+    # calculating masks for per-layer analyses
+    if args.per_layer:
+        layer_masks = list()
+        for i in range(n_layers):
+            layer_mask = list()
+            for p in model.parameters():
+                if p in list(model.h[i].parameters()):
+                    layer_mask.append(torch.ones_like(p.data))
+                else:
+                    layer_mask.append(torch.zeros_like(p.data))
+            layer_masks.append(gather_flat_grad(layer_mask))
+
         
     # Lissa depth calculation
     args.lissa_depth = int(args.lissa_depth_pct * len(train_dataset))
@@ -319,7 +340,11 @@ def main():
         
         if len(correct_inputs[0]) <= 1 or len(incorrect_inputs[0]) <= 1: # prevent empty label after shift since we have no <SOS>
             continue
-        influence_dict[tmp_idx] = np.zeros(len(train_dataset))
+        if not args.per_layer:
+            influence_dict[tmp_idx] = np.zeros(len(train_dataset))
+        else:
+            for i in range(n_layers):
+                influence_dict[i][tmp_idx] = np.zeros(len(train_dataset))
         
         ######## L_TEST GRADIENT ########
         model.eval()
@@ -372,18 +397,38 @@ def main():
         with torch.no_grad():
             for tmp_idx in ihvp_dict.keys():
                 if args.influence_metric == "IF":
-                    influence_dict[tmp_idx][train_idx] = torch.dot(ihvp_dict[tmp_idx], gather_flat_grad(train_grads)).item()
+                    if not args.per_layer:
+                        influence_dict[tmp_idx][train_idx] = torch.dot(ihvp_dict[tmp_idx], gather_flat_grad(train_grads)).item()
+                    else:
+                        for i in range(n_layers):
+                            influence_dict[i][tmp_idx][train_idx] = torch.dot(
+                                layer_masks[i] * ihvp_dict[tmp_idx],
+                                layer_masks[i] * gather_flat_grad(train_grads)
+                            ).item()
                 elif args.influence_metric == "GC":
-                    influence_dict[tmp_idx][train_idx] = nn.functional.cosine_similarity(ihvp_dict[tmp_idx], gather_flat_grad(train_grads),
-                                                                                         dim=0, eps=1e-12).item()
+                    if not args.per_layer:
+                        influence_dict[tmp_idx][train_idx] = nn.functional.cosine_similarity(ihvp_dict[tmp_idx], gather_flat_grad(train_grads),
+                                                                                             dim=0, eps=1e-12).item()
+                    else:
+                        for i in range(n_layers):
+                            influence_dict[i][tmp_idx][train_idx] \
+                                = nn.functional.cosine_similarity(
+                                    layer_masks[i] * ihvp_dict[tmp_idx], 
+                                    layer_masks[i] * gather_flat_grad(train_grads),
+                                    dim=0,
+                                    eps=1e-12
+                                ).item()
                 else:
                     raise ValueError("N/A")
     
     print(influence_dict) # Han: debug
     
-    for k, v in influence_dict.items():
-        influence_filename = f"influence_test_idx_{k}.pkl"
-        pickle.dump(v, open(os.path.join(args.output_dir, influence_filename), "wb"))
+    if not args.per_layer:
+        for k, v in influence_dict.items():
+            influence_filename = f"influence_test_idx_{k}.pkl"
+            pickle.dump(v, open(os.path.join(args.output_dir, influence_filename), "wb"))
+    else:
+        torch.save(influence_dict, "influence_dict.pt")
 
 
 if __name__ == "__main__":
