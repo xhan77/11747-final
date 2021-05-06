@@ -203,6 +203,10 @@ def main():
                         type=int,
                         default=-1,
                         help="when not -1, --test_idx will be disabled")
+    parser.add_argument('--influence_metric',
+                        type=str,
+                        default="IF",
+                        help="IF - influence functions, GC - gradient cosine similarity")
 
     args = parser.parse_args()
 
@@ -330,14 +334,18 @@ def main():
         
         set_seed(args)
         
-        ######## IHVP ########
-        model.train()
-        logger.info("######## START COMPUTING IHVP (IDX %d) ########", tmp_idx)
-        inverse_hvp = get_inverse_hvp_lissa(test_grads, model, param_influence, train_lissa_dataloader, args)
-        logger.info("######## FINISHED COMPUTING IHVP (IDX %d) ########", tmp_idx)
-        ################
-        
-        ihvp_dict[tmp_idx] = inverse_hvp.detach().cpu() # put to CPU to save GPU memory
+        if args.influence_metric == "IF":
+            ######## IHVP ########
+            model.train()
+            logger.info("######## START COMPUTING IHVP (IDX %d) ########", tmp_idx)
+            inverse_hvp = get_inverse_hvp_lissa(test_grads, model, param_influence, train_lissa_dataloader, args)
+            logger.info("######## FINISHED COMPUTING IHVP (IDX %d) ########", tmp_idx)
+            ################
+            ihvp_dict[tmp_idx] = inverse_hvp.detach().cpu() # put to CPU to save GPU memory
+        elif args.influence_metric == "GC":
+            ihvp_dict[tmp_idx] = gather_flat_grad(test_grads).detach().cpu() # put to CPU to save GPU memory
+        else:
+            raise ValueError("N/A")
         
     # Han: put ihvps back to GPU, but may run out of GPU memory
     for tmp_idx in ihvp_dict.keys():
@@ -354,7 +362,7 @@ def main():
             continue
 
         ######## L_TRAIN GRADIENT ########
-        model.train()
+        model.eval()
         model.zero_grad()
         _outputs = model(_inputs, labels=_labels)
         train_loss = _outputs[0]
@@ -363,9 +371,15 @@ def main():
         
         with torch.no_grad():
             for tmp_idx in ihvp_dict.keys():
-                influence_dict[tmp_idx][train_idx] = torch.dot(ihvp_dict[tmp_idx], gather_flat_grad(train_grads)).item()
+                if args.influence_metric == "IF":
+                    influence_dict[tmp_idx][train_idx] = torch.dot(ihvp_dict[tmp_idx], gather_flat_grad(train_grads)).item()
+                elif args.influence_metric == "GC":
+                    influence_dict[tmp_idx][train_idx] = nn.functional.cosine_similarity(ihvp_dict[tmp_idx], gather_flat_grad(train_grads),
+                                                                                         dim=0, eps=1e-12).item()
+                else:
+                    raise ValueError("N/A")
     
-    print(influence_dict)
+    print(influence_dict) # Han: debug
     
     for k, v in influence_dict.items():
         influence_filename = f"influence_test_idx_{k}.pkl"
