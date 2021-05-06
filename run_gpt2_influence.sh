@@ -1,4 +1,4 @@
-# influence function
+# influence function (gradient norm problematically huge? need scaling factor of 1e28)
 python gpt2_influence.py --output_dir=_test_influence_outputs --model_type=gpt2 --model_name_or_path=model/_test_output/ --task=contra\
     --train_data_file=./data/contrastive_sample.tsv --train_data_field="N/A"\
     --eval_data_file=./data/contrastive_sample.tsv --eval_data_field="N/A"\
