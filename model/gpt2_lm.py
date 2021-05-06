@@ -286,6 +286,7 @@ class ContraDataset(Dataset):
                 pickle.dump(data, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     def __len__(self):
+#         return 100 # Han: remember to delete
         return len(self.examples)
 
     def __getitem__(self, item):
@@ -330,6 +331,9 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
 
     def collate(examples: List[torch.Tensor]):
         if tokenizer._pad_token is None:
+            if args.task == "contra":
+                return pad_sequence(list(map(lambda x: x[:][0], examples)), batch_first=True, padding_value=2),\
+                       pad_sequence(list(map(lambda x: x[:][1], examples)), batch_first=True, padding_value=2)
             return pad_sequence(examples, batch_first=True, padding_value=2) # Han: GPT2 has no paddings. We use # (index=2) as padding so that the loss function knows to ignore.
         return pad_sequence(examples, batch_first=True, padding_value=tokenizer.pad_token_id)
 
@@ -389,10 +393,15 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
     for _ in train_iterator:
         epoch_iterator = tqdm(train_dataloader, desc="Iteration")
         for step, batch in enumerate(epoch_iterator): # batch: (2, batch_size)
-
             inputs, labels = batch, batch
-            inputs = inputs.to(args.device)
-            labels = labels.to(args.device)
+            
+            if args.task == "contra":
+                inputs = inputs[0].to(args.device) # Han: using the contrastive correct sentence ([0]) for training
+                labels = labels[0].to(args.device) # Han: using the contrastive correct sentence ([0]) for training
+            else:
+                inputs = inputs.to(args.device)
+                labels = labels.to(args.device)
+            
             model.train()
             outputs = model(inputs, labels=labels)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)

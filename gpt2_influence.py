@@ -380,8 +380,8 @@ def main():
     for train_idx, train_batch in enumerate(tqdm(train_dataloader, desc="Train data gradient")):
         _inputs, _labels = train_batch, train_batch
         
-        _inputs = _inputs[0].to(args.device) # Han: using the test contrastive correct sentence ([0]) as training for now, need to modify later
-        _labels = _labels[0].to(args.device) # Han: using the test contrastive correct sentence ([0]) as training for now, need to modify later
+        _inputs = _inputs[0].to(args.device) # Han: using the contrastive correct sentence ([0]) as training for now, need to modify later
+        _labels = _labels[0].to(args.device) # Han: using the contrastive correct sentence ([0]) as training for now, need to modify later
         
         if len(_inputs[0]) <= 1: # prevent empty label after shift since we have no <SOS>
             continue
@@ -421,7 +421,9 @@ def main():
                 else:
                     raise ValueError("N/A")
     
-    print(influence_dict) # Han: debug
+#     print(influence_dict) # Han: debug
+    for k, v in influence_dict.items():
+        print("test idx:", k, " -- most influential train idx:", np.argsort(v)[:10])
     
     if not args.per_layer:
         for k, v in influence_dict.items():
