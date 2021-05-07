@@ -6,7 +6,7 @@ import pickle
 import random
 import re
 import csv
-from typing import Dict, List, Tuple
+from typing import DefaultDict, Dict, List, Tuple
 import time
 
 import numpy as np
@@ -260,7 +260,7 @@ def main():
 
     # Load model
     model = model_class.from_pretrained(args.model_name_or_path, config=config)
-    n_layers = len(model.h)
+    n_layers = len(model.transformer.h)
 
     model.to(args.device)
     
@@ -304,8 +304,8 @@ def main():
         layer_masks = list()
         for i in range(n_layers):
             layer_mask = list()
-            for p in model.parameters():
-                if p in list(model.h[i].parameters()):
+            for name, p in model.named_parameters():
+                if name.startswith(f"transformer.h.{i}"):
                     layer_mask.append(torch.ones_like(p.data))
                 else:
                     layer_mask.append(torch.zeros_like(p.data))
@@ -316,7 +316,7 @@ def main():
     args.lissa_depth = int(args.lissa_depth_pct * len(train_dataset))
     
     # Influence functions!
-    influence_dict = dict()
+    influence_dict = DefaultDict(dict)
     ihvp_dict = dict()
     
     for tmp_idx, batch in enumerate(eval_dataloader):

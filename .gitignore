@@ -1,0 +1,6 @@
+*.pyc
+*.pkl
+.vscode/
+*.bin
+*.json
+model/gpt2_ft_correct_output/*
