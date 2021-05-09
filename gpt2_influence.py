@@ -210,7 +210,9 @@ def main():
     parser.add_argument('--per_layer',
                         action="store_true",
                         help="study per layer influence")
-
+    parser.add_argument('--test_loss_no_contra',
+                        action="store_true",
+                        help="whether to examine test loss directly (without contrastive setup)")
 
     args = parser.parse_args()
 
@@ -349,10 +351,14 @@ def main():
         ######## L_TEST GRADIENT ########
         model.eval()
         model.zero_grad()
-        correct_outputs = model(correct_inputs, labels=correct_labels)
-        incorrect_outputs = model(incorrect_inputs, labels=incorrect_labels)
-        lm_loss = correct_outputs[0]
-        test_loss = correct_outputs[0] - incorrect_outputs[0] # this is the diff_loss
+        if args.test_loss_no_contra:
+            correct_outputs = model(correct_inputs, labels=correct_labels)
+            test_loss = correct_outputs[0]
+        else:
+            correct_outputs = model(correct_inputs, labels=correct_labels)
+            incorrect_outputs = model(incorrect_inputs, labels=incorrect_labels)
+            lm_loss = correct_outputs[0]
+            test_loss = correct_outputs[0] - incorrect_outputs[0] # this is the diff_loss
         
         test_grads = autograd.grad(test_loss, param_influence)
         ################
