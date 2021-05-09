@@ -430,7 +430,7 @@ def main():
             influence_filename = f"influence_test_idx_{k}.pkl"
             pickle.dump(v, open(os.path.join(args.output_dir, influence_filename), "wb"))
     else:
-        torch.save(influence_dict, "influence_dict.pt")
+        torch.save(influence_dict, f"influence_dict_{args.start_test_idx}_{args.end_test_idx}.pt")
 
 
 if __name__ == "__main__":
