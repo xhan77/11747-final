@@ -32,16 +32,40 @@
 trap "kill 0" EXIT
 
 # ngpu=$1 # first argument
-ngpu=10 # first argument through hardcoding (for sbatch)
+ngpu=5 # first argument through hardcoding (for sbatch)
 
 # for RTX 3090, processing 15 test examples in one run is possible
 starti=("0" "10" "20" "30" "40" "50" "60" "70" "80" "90")
 endi=("9" "19" "29" "39" "49" "59" "69" "79" "89" "99")
 
-# regular tuning on various dataset setups
+
+
+# # regular tuning on various dataset setups
+# for i in $(seq 0 1 $((ngpu-1)))
+# do
+# CUDA_VISIBLE_DEVICES='0' python gpt2_influence.py --output_dir=GC_nocontra_outputs --model_type=gpt2 --model_name_or_path=model/gpt2_ft_correct_output/ --task=contra\
+#     --train_data_file=./data/train.txt --train_data_field="N/A"\
+#     --eval_data_file=./data/test.txt --eval_data_field="N/A"\
+#     --seed=2020 --per_gpu_train_batch_size=1\
+#     --start_test_idx=${starti[i]} --end_test_idx=${endi[i]}\
+#     --logging_steps=1 --block_size=256\
+#     --influence_metric="GC" --overwrite_output_dir --overwrite_cache --test_loss_no_contra
+
+# CUDA_VISIBLE_DEVICES='0' python gpt2_influence.py --output_dir=GC_outputs --model_type=gpt2 --model_name_or_path=model/gpt2_ft_correct_output/ --task=contra\
+#     --train_data_file=./data/train.txt --train_data_field="N/A"\
+#     --eval_data_file=./data/test.txt --eval_data_field="N/A"\
+#     --seed=2020 --per_gpu_train_batch_size=1\
+#     --start_test_idx=${starti[i]} --end_test_idx=${endi[i]}\
+#     --logging_steps=1 --block_size=256\
+#     --influence_metric="GC" --overwrite_output_dir --overwrite_cache
+# done
+
+
+
+#### fresh pretrained gpt2 as model ####
 for i in $(seq 0 1 $((ngpu-1)))
 do
-CUDA_VISIBLE_DEVICES='0' python gpt2_influence.py --output_dir=GC_nocontra_outputs --model_type=gpt2 --model_name_or_path=model/gpt2_ft_correct_output/ --task=contra\
+CUDA_VISIBLE_DEVICES='0' python gpt2_influence.py --output_dir=init_GPT2_GC_nocontra_outputs --model_type=gpt2 --model_name_or_path=gpt2 --task=contra\
     --train_data_file=./data/train.txt --train_data_field="N/A"\
     --eval_data_file=./data/test.txt --eval_data_field="N/A"\
     --seed=2020 --per_gpu_train_batch_size=1\
@@ -49,7 +73,7 @@ CUDA_VISIBLE_DEVICES='0' python gpt2_influence.py --output_dir=GC_nocontra_outpu
     --logging_steps=1 --block_size=256\
     --influence_metric="GC" --overwrite_output_dir --overwrite_cache --test_loss_no_contra
 
-CUDA_VISIBLE_DEVICES='0' python gpt2_influence.py --output_dir=GC_outputs --model_type=gpt2 --model_name_or_path=model/gpt2_ft_correct_output/ --task=contra\
+CUDA_VISIBLE_DEVICES='0' python gpt2_influence.py --output_dir=init_GPT2_GC_outputs --model_type=gpt2 --model_name_or_path=gpt2 --task=contra\
     --train_data_file=./data/train.txt --train_data_field="N/A"\
     --eval_data_file=./data/test.txt --eval_data_field="N/A"\
     --seed=2020 --per_gpu_train_batch_size=1\
@@ -58,12 +82,22 @@ CUDA_VISIBLE_DEVICES='0' python gpt2_influence.py --output_dir=GC_outputs --mode
     --influence_metric="GC" --overwrite_output_dir --overwrite_cache
 done
 
-####
-
-CUDA_VISIBLE_DEVICES='0' python gpt2_influence.py --output_dir=_test_influence_outputs --model_type=gpt2 --model_name_or_path=gpt2 --task=contra\
-    --train_data_file=./data/train.txt --train_data_field="N/A"\
+#### include both correct and incorrect data as train set (for interpretation) ####
+for i in $(seq 0 1 $((ngpu-1)))
+do
+CUDA_VISIBLE_DEVICES='0' python gpt2_influence.py --output_dir=unrolled_train_GC_nocontra_outputs --model_type=gpt2 --model_name_or_path=model/gpt2_ft_correct_output/ --task=contra\
+    --train_data_file=./data/unrolled_train.txt --train_data_field="N/A"\
     --eval_data_file=./data/test.txt --eval_data_field="N/A"\
     --seed=2020 --per_gpu_train_batch_size=1\
-    --start_test_idx=0 --end_test_idx=9\
+    --start_test_idx=${starti[i]} --end_test_idx=${endi[i]}\
+    --logging_steps=1 --block_size=256\
+    --influence_metric="GC" --overwrite_output_dir --overwrite_cache --test_loss_no_contra
+
+CUDA_VISIBLE_DEVICES='0' python gpt2_influence.py --output_dir=unrolled_train_GC_outputs --model_type=gpt2 --model_name_or_path=model/gpt2_ft_correct_output/ --task=contra\
+    --train_data_file=./data/unrolled_train.txt --train_data_field="N/A"\
+    --eval_data_file=./data/test.txt --eval_data_field="N/A"\
+    --seed=2020 --per_gpu_train_batch_size=1\
+    --start_test_idx=${starti[i]} --end_test_idx=${endi[i]}\
     --logging_steps=1 --block_size=256\
     --influence_metric="GC" --overwrite_output_dir --overwrite_cache
+done
